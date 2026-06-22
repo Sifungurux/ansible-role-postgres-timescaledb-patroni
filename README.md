@@ -123,7 +123,9 @@ molecule verify [-s cluster]
 molecule destroy [-s cluster]
 ```
 
-The verify playbook checks:
+### `default` scenario — single-node (Debian 12 + Rocky Linux 9)
+
+Verifies on each platform independently:
 
 - etcd and Patroni services are active
 - Patroni REST API reports `state: running`
@@ -131,6 +133,17 @@ The verify playbook checks:
 - TimescaleDB extension is loaded in target databases
 - External TCP connections succeed as both superuser and app user
 - Hypertable creation works end-to-end
+
+### `cluster` scenario — 3-node HA (Debian 12)
+
+Spins up three containers in a shared network and verifies the full cluster lifecycle:
+
+- etcd forms a 3-member quorum (confirmed from every node)
+- Exactly one Patroni primary is elected
+- Both replicas are streaming live changes from the primary (`pg_stat_replication`)
+- TimescaleDB extension is present on all three nodes (proves WAL replication is delivering catalog changes)
+- External TCP connections succeed on all three nodes, including the read-only replicas
+- Hypertable creation succeeds on the primary
 
 ## Platform notes
 
