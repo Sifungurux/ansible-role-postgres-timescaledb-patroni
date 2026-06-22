@@ -1,0 +1,51 @@
+---
+postgresql_bin_dir: "/usr/lib/postgresql/{{ postgresql_version }}/bin"
+postgresql_data_dir: "/var/lib/postgresql/{{ postgresql_version }}/main"
+postgresql_unix_socket_dir: "/var/run/postgresql"
+postgresql_system_service: "postgresql@{{ postgresql_version }}-main"
+
+postgresql_packages:
+  - "postgresql-{{ postgresql_version }}"
+  - "postgresql-client-{{ postgresql_version }}"
+
+timescaledb_packages:
+  - "timescaledb-2-postgresql-{{ postgresql_version }}"
+
+patroni_packages:
+  - patroni
+  - python3-psycopg2
+
+# etcd is not in Debian 12 (bookworm) repos; binary is installed by tasks/etcd.yml
+etcd_packages: []
+etcd_install_dir: /usr/local/bin
+
+system_packages:
+  - curl
+  - gnupg
+  - ca-certificates
+  - lsb-release
+  - acl
+
+postgresql_pgdg_key_url: "https://www.postgresql.org/media/keys/ACCC4CF8.asc"
+postgresql_pgdg_key_dest: "/usr/share/keyrings/pgdg.gpg"
+postgresql_pgdg_repo: >-
+  deb [signed-by=/usr/share/keyrings/pgdg.gpg]
+  https://apt.postgresql.org/pub/repos/apt
+  {{ ansible_distribution_release }}-pgdg main
+
+timescaledb_repo_key_url: "https://packagecloud.io/timescale/timescaledb/gpgkey"
+timescaledb_repo_key_dest: "/usr/share/keyrings/timescaledb.gpg"
+timescaledb_repo: >-
+  deb [signed-by=/usr/share/keyrings/timescaledb.gpg]
+  https://packagecloud.io/timescale/timescaledb/debian/
+  {{ ansible_distribution_release }} main
+
+etcd_config_path: "/etc/default/etcd"
+etcd_service_name: etcd
+etcd_data_dir: "/var/lib/etcd"
+
+patroni_config_dir: "/etc/patroni"
+# Debian's patroni.service unit has ConditionPathExists=/etc/patroni/config.yml
+# — must use that exact path or the service silently refuses to start.
+patroni_config_path: "/etc/patroni/config.yml"
+patroni_service_name: patroni

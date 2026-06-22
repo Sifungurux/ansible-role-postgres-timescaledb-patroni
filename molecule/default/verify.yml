@@ -1,0 +1,141 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    postgresql_version: 16
+    patroni_restapi_port: 8008
+    postgresql_port: 5432
+    patroni_superuser_username: postgres
+    patroni_superuser_password: "TestSuperPass123!"
+    timescaledb_db_name: testdb
+    timescaledb_app_user: testuser
+    timescaledb_app_password: "TestAppPass123!"
+
+  tasks:
+    # ── Service health ──────────────────────────────────────────────────────
+    - name: Verify etcd service is running
+      ansible.builtin.service_facts:
+    - name: Assert etcd is active
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['etcd.service'].state == 'running'
+        fail_msg: "etcd service is not running"
+
+    - name: Assert Patroni is active
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['patroni.service'].state == 'running'
+        fail_msg: "Patroni service is not running"
+
+    # ── Patroni REST API ────────────────────────────────────────────────────
+    - name: Query Patroni health endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ patroni_restapi_port }}/health"
+        return_content: true
+        status_code: 200
+      register: _patroni_health
+
+    - name: Assert Patroni cluster state is running
+      ansible.builtin.assert:
+        that:
+          - "'state' in _patroni_health.json"
+          - _patroni_health.json.state == 'running'
+        fail_msg: "Patroni health reports: {{ _patroni_health.content }}"
+
+    # ── PostgreSQL readiness ────────────────────────────────────────────────
+    - name: Load OS-specific variables for bin path
+      ansible.builtin.include_vars: "../../vars/{{ ansible_os_family }}.yml"
+
+    - name: Check PostgreSQL is accepting connections
+      ansible.builtin.command:
+        cmd: "{{ postgresql_bin_dir }}/pg_isready -h 127.0.0.1 -p {{ postgresql_port }} -U {{ patroni_superuser_username }}"
+      register: _pg_isready
+      changed_when: false
+      failed_when: _pg_isready.rc != 0
+
+    # ── TimescaleDB extension ───────────────────────────────────────────────
+    - name: Verify TimescaleDB extension is loaded in postgres database
+      community.postgresql.postgresql_query:
+        login_db: postgres
+        query: "SELECT extname FROM pg_extension WHERE extname = 'timescaledb'"
+        login_unix_socket: "/var/run/postgresql"
+      become_user: postgres
+      register: _tsdb_ext
+
+    - name: Assert TimescaleDB extension exists
+      ansible.builtin.assert:
+        that:
+          - _tsdb_ext.rowcount == 1
+        fail_msg: "TimescaleDB extension not found in pg_extension"
+
+    - name: Verify TimescaleDB extension is loaded in application database
+      community.postgresql.postgresql_query:
+        login_db: "{{ timescaledb_db_name }}"
+        query: "SELECT extname FROM pg_extension WHERE extname = 'timescaledb'"
+        login_unix_socket: "/var/run/postgresql"
+      become_user: postgres
+      register: _tsdb_appdb_ext
+
+    - name: Assert TimescaleDB extension exists in app database
+      ansible.builtin.assert:
+        that:
+          - _tsdb_appdb_ext.rowcount == 1
+        fail_msg: "TimescaleDB extension not found in {{ timescaledb_db_name }}"
+
+    # ── External TCP connection ─────────────────────────────────────────────
+    # Connect via TCP (127.0.0.1) rather than the UNIX socket to simulate
+    # an external client going through pg_hba.conf and network stack.
+    - name: Verify external TCP connection as superuser
+      community.postgresql.postgresql_query:
+        login_db: postgres
+        query: "SELECT version()"
+        login_host: "127.0.0.1"
+        login_port: "{{ postgresql_port }}"
+        login_user: "{{ patroni_superuser_username }}"
+        login_password: "{{ patroni_superuser_password }}"
+      register: _ext_conn_super
+
+    - name: Assert external superuser connection succeeded
+      ansible.builtin.assert:
+        that:
+          - _ext_conn_super.rowcount == 1
+        fail_msg: "External TCP connection as superuser failed"
+
+    - name: Verify external TCP connection as application user
+      community.postgresql.postgresql_query:
+        login_db: "{{ timescaledb_db_name }}"
+        query: "SELECT current_user"
+        login_host: "127.0.0.1"
+        login_port: "{{ postgresql_port }}"
+        login_user: "{{ timescaledb_app_user }}"
+        login_password: "{{ timescaledb_app_password }}"
+      register: _ext_conn_app
+
+    - name: Assert external app user connection succeeded
+      ansible.builtin.assert:
+        that:
+          - _ext_conn_app.rowcount == 1
+        fail_msg: "External TCP connection as app user failed"
+
+    # ── Hypertable smoke test ───────────────────────────────────────────────
+    - name: Create a hypertable to confirm TimescaleDB is functional
+      community.postgresql.postgresql_query:
+        login_db: "{{ timescaledb_db_name }}"
+        query: |
+          CREATE TABLE IF NOT EXISTS sensor_data (
+            time TIMESTAMPTZ NOT NULL,
+            sensor_id INTEGER,
+            value DOUBLE PRECISION
+          );
+          SELECT create_hypertable('sensor_data', 'time', if_not_exists => TRUE);
+        login_unix_socket: "/var/run/postgresql"
+      become_user: postgres
+      register: _hypertable
+
+    - name: Assert hypertable was created or already exists
+      ansible.builtin.assert:
+        that:
+          - _hypertable is succeeded
+        fail_msg: "Failed to create hypertable: {{ _hypertable }}"

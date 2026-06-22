@@ -1,0 +1,74 @@
+---
+# Run with Colima (macOS replacement for Docker Desktop):
+#   colima start --cpu 2 --memory 4
+#   molecule test
+#
+# Or with Podman via Lima:
+#   DOCKER_HOST="unix://${HOME}/.lima/podman/sock/podman.sock" molecule test
+dependency:
+  name: galaxy
+  options:
+    requirements-file: requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: debian12-patroni
+    image: geerlingguy/docker-debian12-ansible:latest
+    command: "/lib/systemd/systemd"
+    cgroupns_mode: host
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    pre_build_image: true
+
+  - name: rocky9-patroni
+    image: geerlingguy/docker-rockylinux9-ansible:latest
+    command: "/usr/lib/systemd/systemd"
+    cgroupns_mode: host
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    pre_build_image: true
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.."
+  config_options:
+    defaults:
+      callback_whitelist: profile_tasks
+  inventory:
+    host_vars:
+      debian12-patroni:
+        patroni_scope: test-cluster
+        patroni_superuser_password: "TestSuperPass123!"
+        patroni_replication_password: "TestReplPass123!"
+        timescaledb_db_name: testdb
+        timescaledb_app_user: testuser
+        timescaledb_app_password: "TestAppPass123!"
+      rocky9-patroni:
+        patroni_scope: test-cluster
+        patroni_superuser_password: "TestSuperPass123!"
+        patroni_replication_password: "TestReplPass123!"
+        timescaledb_db_name: testdb
+        timescaledb_app_user: testuser
+        timescaledb_app_password: "TestAppPass123!"
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - cleanup
+    - destroy

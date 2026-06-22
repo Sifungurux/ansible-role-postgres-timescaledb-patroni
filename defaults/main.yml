@@ -1,0 +1,55 @@
+---
+# PostgreSQL version — 16 or higher
+postgresql_version: 16
+postgresql_port: 5432
+
+# Patroni cluster identity
+patroni_scope: postgres-cluster
+patroni_namespace: /service/
+patroni_restapi_port: 8008
+patroni_restapi_listen: "0.0.0.0"
+patroni_postgresql_listen: "0.0.0.0"
+
+# Superuser and replication credentials (override in vault)
+patroni_superuser_username: postgres
+patroni_superuser_password: patroni
+patroni_replication_username: replicator
+patroni_replication_password: replicator
+
+# Patroni REST API credentials (leave empty to disable auth)
+patroni_restapi_username: ""
+patroni_restapi_password: ""
+
+# etcd DCS — list one or more endpoints
+patroni_etcd_hosts:
+  - "127.0.0.1:2379"
+
+etcd_client_port: 2379
+etcd_peer_port: 2380
+# Set to "existing" when joining an already-running cluster
+etcd_initial_cluster_state: "new"
+
+# etcd binary version (used only on Debian — apt package removed from bookworm)
+etcd_version: "3.5.14"
+# Automatically resolved from ansible_architecture; override only if cross-compiling
+etcd_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+# pg_hba lines appended after the built-in entries
+patroni_pg_hba_extra: []
+
+# TimescaleDB optional app database
+timescaledb_db_name: ""
+timescaledb_app_user: ""
+timescaledb_app_password: ""
+
+# PostgreSQL parameters applied via Patroni DCS (change takes effect after reload/restart)
+postgresql_parameters:
+  max_connections: 100
+  shared_buffers: "128MB"
+  effective_cache_size: "512MB"
+  wal_level: "replica"
+  hot_standby: "on"
+  max_wal_senders: 10
+  max_replication_slots: 10
+  wal_keep_size: "128MB"
+  shared_preload_libraries: "timescaledb"

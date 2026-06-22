@@ -1,0 +1,76 @@
+# Managed by Ansible — do not edit manually
+---
+scope: {{ patroni_scope }}
+namespace: {{ patroni_namespace }}
+name: {{ inventory_hostname }}
+
+restapi:
+  listen: {{ patroni_restapi_listen }}:{{ patroni_restapi_port }}
+  connect_address: {{ ansible_default_ipv4.address | default('127.0.0.1') }}:{{ patroni_restapi_port }}
+{% if patroni_restapi_username | length > 0 %}
+  authentication:
+    username: {{ patroni_restapi_username }}
+    password: {{ patroni_restapi_password }}
+{% endif %}
+
+etcd3:
+  hosts: "{{ patroni_etcd_hosts | join(',') }}"
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+{% for key, value in postgresql_parameters.items() %}
+        {{ key }}: "{{ value }}"
+{% endfor %}
+
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+
+  pg_hba:
+    - local all all trust
+    - host all all 127.0.0.1/32 scram-sha-256
+    - host all all ::1/128 scram-sha-256
+    - host all all 0.0.0.0/0 scram-sha-256
+    - host replication {{ patroni_replication_username }} 127.0.0.1/32 scram-sha-256
+    - host replication {{ patroni_replication_username }} 0.0.0.0/0 scram-sha-256
+{% for entry in patroni_pg_hba_extra %}
+    - {{ entry }}
+{% endfor %}
+
+postgresql:
+  listen: {{ patroni_postgresql_listen }}:{{ postgresql_port }}
+  connect_address: {{ ansible_default_ipv4.address | default('127.0.0.1') }}:{{ postgresql_port }}
+  data_dir: {{ postgresql_data_dir }}
+  bin_dir: {{ postgresql_bin_dir }}
+  pgpass: /tmp/pgpass{{ postgresql_port }}
+
+  authentication:
+    replication:
+      username: {{ patroni_replication_username }}
+      password: {{ patroni_replication_password }}
+    superuser:
+      username: {{ patroni_superuser_username }}
+      password: {{ patroni_superuser_password }}
+    rewind:
+      username: rewind_user
+      password: {{ patroni_superuser_password }}
+
+  parameters:
+{% for key, value in postgresql_parameters.items() %}
+    {{ key }}: "{{ value }}"
+{% endfor %}
+    unix_socket_directories: "{{ postgresql_unix_socket_dir }}"
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false

@@ -1,0 +1,29 @@
+---
+galaxy_info:
+  role_name: postgres_timescale_patroni
+  author: kirk
+  description: >
+    Install and configure PostgreSQL 16+ with TimescaleDB and Patroni HA
+    on Debian/Ubuntu and RHEL/Rocky/AlmaLinux.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+    - name: EL
+      versions:
+        - "9"
+        - "8"
+  galaxy_tags:
+    - postgresql
+    - timescaledb
+    - patroni
+    - ha
+    - database
+
+dependencies: []

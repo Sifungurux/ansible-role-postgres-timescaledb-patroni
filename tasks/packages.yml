@@ -1,0 +1,108 @@
+---
+- name: Debian | Install PostgreSQL, TimescaleDB, Patroni, and etcd packages
+  ansible.builtin.apt:
+    name: "{{ postgresql_packages + timescaledb_packages + patroni_packages + etcd_packages }}"
+    state: present
+  when: ansible_os_family == 'Debian'
+  notify: Reload systemd
+
+- name: RedHat | Install PostgreSQL packages
+  ansible.builtin.dnf:
+    name: "{{ postgresql_packages }}"
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: RedHat | Install TimescaleDB package
+  ansible.builtin.dnf:
+    name: "{{ timescaledb_packages }}"
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: RedHat | Install Patroni and etcd packages
+  ansible.builtin.dnf:
+    name: "{{ patroni_packages + etcd_packages }}"
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+# The EPEL patroni RPM on RHEL 9 uses /usr/bin/python3.12 (pulled in via PGDG deps)
+# but doesn't declare python3-etcd3gw as a dependency. Bootstrap pip for that
+# interpreter then install etcd3gw so Patroni can import its DCS modules.
+- name: RedHat | Read patroni shebang to find its Python interpreter
+  ansible.builtin.command:
+    cmd: head -1 /usr/bin/patroni
+  register: _patroni_shebang
+  changed_when: false
+  when: ansible_os_family == 'RedHat'
+
+- name: RedHat | Set patroni Python interpreter and pip executable facts
+  ansible.builtin.set_fact:
+    _patroni_python: "{{ _patroni_shebang.stdout | regex_replace('^#!', '') | trim }}"
+    _patroni_pip: "{{ _patroni_shebang.stdout | regex_replace('^#!/.*/python', '/usr/local/bin/pip') | trim }}"
+  when:
+    - ansible_os_family == 'RedHat'
+    - _patroni_shebang.rc == 0
+
+- name: RedHat | Bootstrap pip for patroni's Python interpreter
+  ansible.builtin.command:
+    cmd: "{{ _patroni_python }} -m ensurepip"
+    creates: "{{ _patroni_pip }}"
+  when:
+    - ansible_os_family == 'RedHat'
+    - _patroni_python is defined
+
+- name: RedHat | Install etcd DCS dependencies for patroni's Python interpreter
+  ansible.builtin.pip:
+    # patroni.dcs.etcd3 inherits from patroni.dcs.etcd, which requires python-etcd
+    # (provides `import etcd`). etcd3gw provides the actual etcd v3 gRPC transport.
+    name:
+      - python-etcd
+      - etcd3gw
+    state: present
+    executable: "{{ _patroni_pip }}"
+  when:
+    - ansible_os_family == 'RedHat'
+    - _patroni_pip is defined
+
+# Determine whether Patroni is already up before touching the stock service.
+- name: Check Patroni service state
+  ansible.builtin.systemd:
+    name: "{{ patroni_service_name }}"
+  register: _patroni_running
+  failed_when: false
+  changed_when: false
+
+# Patroni must own PostgreSQL exclusively.
+# Skip this when Patroni is already active to avoid disturbing a running cluster.
+- name: Stop and disable stock PostgreSQL service so Patroni owns it
+  ansible.builtin.service:
+    name: "{{ postgresql_system_service }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: _patroni_running.status.ActiveState | default('inactive') != 'active'
+
+# On Debian, postgresql-N package auto-runs pg_createcluster during postinst, which
+# initialises the data directory BEFORE Patroni ever starts. Patroni skips its own
+# bootstrap (initdb + pg_hba setup) when it finds an existing data dir, so the
+# external-connection pg_hba rules we configure never get written. Fix: drop the
+# auto-created cluster once, before Patroni's first start. The patroni.dynamic.json
+# sentinel means Patroni has already taken ownership — skip on subsequent runs.
+- name: Check whether data directory is already Patroni-managed
+  ansible.builtin.stat:
+    path: "{{ postgresql_data_dir }}/patroni.dynamic.json"
+  register: _patroni_managed
+
+- name: Check whether auto-created data directory exists
+  ansible.builtin.stat:
+    path: "{{ postgresql_data_dir }}"
+  register: _pg_data_dir
+
+- name: Debian | Drop auto-created cluster so Patroni bootstraps a clean data dir
+  ansible.builtin.command:
+    cmd: "pg_dropcluster --stop {{ postgresql_version }} main"
+  when:
+    - ansible_os_family == 'Debian'
+    - _pg_data_dir.stat.exists
+    - not _patroni_managed.stat.exists
+  changed_when: true
+  failed_when: false

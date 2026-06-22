@@ -1,0 +1,21 @@
+---
+- name: Load OS-specific variables
+  ansible.builtin.include_vars: "{{ ansible_os_family }}.yml"
+
+- name: Run pre-flight assertions
+  ansible.builtin.include_tasks: preflight.yml
+
+- name: Configure package repositories
+  ansible.builtin.include_tasks: repositories.yml
+
+- name: Install packages
+  ansible.builtin.include_tasks: packages.yml
+
+- name: Configure and start etcd
+  ansible.builtin.include_tasks: etcd.yml
+
+- name: Configure and start Patroni
+  ansible.builtin.include_tasks: patroni.yml
+
+- name: Configure TimescaleDB extension
+  ansible.builtin.include_tasks: timescaledb.yml

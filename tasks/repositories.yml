@@ -1,0 +1,98 @@
+---
+# ── Debian / Ubuntu ──────────────────────────────────────────────────────────
+- name: Debian | Install prerequisite packages
+  ansible.builtin.apt:
+    name: "{{ system_packages }}"
+    state: present
+    update_cache: true
+  when: ansible_os_family == 'Debian'
+
+- name: Debian | Download PGDG signing key
+  ansible.builtin.get_url:
+    url: "{{ postgresql_pgdg_key_url }}"
+    dest: "/tmp/pgdg.asc"
+    mode: "0644"
+  when: ansible_os_family == 'Debian'
+
+- name: Debian | Dearmor PGDG signing key
+  ansible.builtin.command:
+    cmd: gpg --batch --yes --dearmor -o {{ postgresql_pgdg_key_dest }} /tmp/pgdg.asc
+    creates: "{{ postgresql_pgdg_key_dest }}"
+  when: ansible_os_family == 'Debian'
+
+- name: Debian | Add PGDG apt repository
+  ansible.builtin.apt_repository:
+    repo: "{{ postgresql_pgdg_repo }}"
+    state: present
+    filename: pgdg
+    update_cache: false
+  when: ansible_os_family == 'Debian'
+
+- name: Debian | Download TimescaleDB signing key
+  ansible.builtin.get_url:
+    url: "{{ timescaledb_repo_key_url }}"
+    dest: "/tmp/timescaledb.gpg"
+    mode: "0644"
+  when: ansible_os_family == 'Debian'
+
+- name: Debian | Dearmor TimescaleDB signing key
+  ansible.builtin.command:
+    cmd: gpg --batch --yes --dearmor -o {{ timescaledb_repo_key_dest }} /tmp/timescaledb.gpg
+    creates: "{{ timescaledb_repo_key_dest }}"
+  when: ansible_os_family == 'Debian'
+
+- name: Debian | Add TimescaleDB apt repository
+  ansible.builtin.apt_repository:
+    repo: "{{ timescaledb_repo }}"
+    state: present
+    filename: timescaledb
+    update_cache: false
+  when: ansible_os_family == 'Debian'
+
+- name: Debian | Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+  when: ansible_os_family == 'Debian'
+
+# ── RedHat / Rocky / AlmaLinux ────────────────────────────────────────────────
+- name: RedHat | Install prerequisite packages
+  ansible.builtin.dnf:
+    name: "{{ system_packages }}"
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: RedHat | Install PGDG RPM repository
+  ansible.builtin.dnf:
+    name: "{{ postgresql_pgdg_rpm_url }}"
+    state: present
+    # Bootstrapping: the PGDG signing key lives inside this very RPM, so we
+    # must skip GPG verification for this one install; all subsequent installs
+    # from the repo use the key the RPM embeds.
+    disable_gpg_check: true
+  when: ansible_os_family == 'RedHat'
+
+- name: RedHat | Disable builtin PostgreSQL module
+  ansible.builtin.command:
+    cmd: dnf -qy module disable postgresql
+  register: _disable_pg_module
+  changed_when: "'Disabling' in _disable_pg_module.stdout"
+  failed_when: false
+  when: ansible_os_family == 'RedHat'
+
+- name: RedHat | Enable EPEL repository (for etcd)
+  ansible.builtin.dnf:
+    name: epel-release
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: RedHat | Add TimescaleDB yum repository
+  ansible.builtin.yum_repository:
+    name: timescale_timescaledb
+    description: timescale_timescaledb
+    baseurl: "{{ timescaledb_repo_baseurl }}"
+    repo_gpgcheck: true
+    gpgcheck: false
+    enabled: true
+    gpgkey: "{{ timescaledb_repo_key_url }}"
+    state: present
+  when: ansible_os_family == 'RedHat'

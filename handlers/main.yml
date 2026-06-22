@@ -1,0 +1,24 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart etcd
+  ansible.builtin.service:
+    name: "{{ etcd_service_name }}"
+    state: restarted
+  listen: Restart etcd
+
+# Use patronictl reload for config-only changes — avoids a PostgreSQL restart
+# when possible. Patroni will promote a restart itself if the changed parameters
+# require it (e.g. shared_preload_libraries).
+- name: Reload Patroni
+  ansible.builtin.command:
+    cmd: >-
+      patronictl -c {{ patroni_config_path }} reload
+      --force {{ patroni_scope }}
+  become: true
+  become_user: postgres
+  changed_when: true
+  failed_when: false
+  listen: Reload Patroni

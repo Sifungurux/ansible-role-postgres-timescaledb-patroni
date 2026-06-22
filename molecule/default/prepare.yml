@@ -1,0 +1,29 @@
+---
+- name: Prepare
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Ensure Python 3 is installed (Debian)
+      ansible.builtin.apt:
+        name:
+          - python3
+          - python3-apt
+        state: present
+        update_cache: true
+      when: ansible_os_family == 'Debian'
+
+    - name: Ensure Python 3 is installed (RedHat)
+      ansible.builtin.dnf:
+        name: python3
+        state: present
+      when: ansible_os_family == 'RedHat'
+
+    # pam_unix account management fails in containerised RHEL because the user
+    # database is incomplete. Prepend a sufficient rule so sudo as root short-
+    # circuits the account phase before pam_unix can error out.
+    - name: RedHat | Patch sudo PAM to allow root account check in containers
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/sudo
+        insertbefore: '^account'
+        line: 'account    sufficient    pam_succeed_if.so user = root'
+      when: ansible_os_family == 'RedHat'

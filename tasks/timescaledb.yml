@@ -1,0 +1,61 @@
+---
+- name: Create TimescaleDB extension in postgres database
+  community.postgresql.postgresql_ext:
+    name: timescaledb
+    login_db: postgres
+    state: present
+    cascade: true
+    login_unix_socket: "{{ postgresql_unix_socket_dir }}"
+  become: true
+  become_user: postgres
+
+- name: Create application database
+  community.postgresql.postgresql_db:
+    name: "{{ timescaledb_db_name }}"
+    owner: "{{ patroni_superuser_username }}"
+    state: present
+    login_unix_socket: "{{ postgresql_unix_socket_dir }}"
+  become: true
+  become_user: postgres
+  when: timescaledb_db_name | length > 0
+
+- name: Create TimescaleDB extension in application database
+  community.postgresql.postgresql_ext:
+    name: timescaledb
+    login_db: "{{ timescaledb_db_name }}"
+    state: present
+    cascade: true
+    login_unix_socket: "{{ postgresql_unix_socket_dir }}"
+  become: true
+  become_user: postgres
+  when: timescaledb_db_name | length > 0
+
+- name: Create application user
+  community.postgresql.postgresql_user:
+    user: "{{ timescaledb_app_user }}"
+    password: "{{ timescaledb_app_password }}"
+    login_db: "{{ timescaledb_db_name }}"
+    state: present
+    # Only set the password on initial creation — avoids a changed report on each run.
+    no_password_changes: true
+    login_unix_socket: "{{ postgresql_unix_socket_dir }}"
+  become: true
+  become_user: postgres
+  no_log: true
+  when:
+    - timescaledb_db_name | length > 0
+    - timescaledb_app_user | length > 0
+
+- name: Grant app user privileges on application database
+  community.postgresql.postgresql_privs:
+    db: "{{ timescaledb_db_name }}"
+    privs: ALL
+    type: database
+    role: "{{ timescaledb_app_user }}"
+    state: present
+    login_unix_socket: "{{ postgresql_unix_socket_dir }}"
+  become: true
+  become_user: postgres
+  when:
+    - timescaledb_db_name | length > 0
+    - timescaledb_app_user | length > 0

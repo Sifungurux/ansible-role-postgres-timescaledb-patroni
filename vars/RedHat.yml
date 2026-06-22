@@ -1,0 +1,41 @@
+---
+postgresql_bin_dir: "/usr/pgsql-{{ postgresql_version }}/bin"
+postgresql_data_dir: "/var/lib/pgsql/{{ postgresql_version }}/data"
+postgresql_unix_socket_dir: "/var/run/postgresql"
+postgresql_system_service: "postgresql-{{ postgresql_version }}"
+
+postgresql_packages:
+  - "postgresql{{ postgresql_version }}-server"
+  - "postgresql{{ postgresql_version }}"
+
+# PGDG repo ships TimescaleDB as timescaledb_N (underscore, not packagecloud dash naming)
+timescaledb_packages:
+  - "timescaledb_{{ postgresql_version }}"
+
+patroni_packages:
+  - patroni
+  - python3-psycopg2
+
+# etcd not reliably available in EPEL 9; binary installed by tasks/etcd.yml
+etcd_packages: []
+etcd_install_dir: /usr/local/bin
+
+system_packages:
+  - ca-certificates
+  - python3
+  - acl
+
+postgresql_pgdg_rpm_url: >-
+  https://download.postgresql.org/pub/repos/yum/reporpms/EL-{{ ansible_distribution_major_version }}-{{ ansible_architecture }}/pgdg-redhat-repo-latest.noarch.rpm
+
+timescaledb_repo_key_url: "https://packagecloud.io/timescale/timescaledb/gpgkey"
+timescaledb_repo_baseurl: >-
+  https://packagecloud.io/timescale/timescaledb/el/{{ ansible_distribution_major_version }}/$basearch
+
+etcd_config_path: "/etc/etcd/etcd.conf"
+etcd_service_name: etcd
+etcd_data_dir: "/var/lib/etcd/default.etcd"
+
+patroni_config_dir: "/etc/patroni"
+patroni_config_path: "/etc/patroni/patroni.yml"
+patroni_service_name: patroni

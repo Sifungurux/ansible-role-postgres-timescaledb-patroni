@@ -1,0 +1,76 @@
+---
+- name: Ensure Patroni config directory exists
+  ansible.builtin.file:
+    path: "{{ patroni_config_dir }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0750"
+
+- name: Ensure PostgreSQL unix socket directory exists
+  ansible.builtin.file:
+    path: "{{ postgresql_unix_socket_dir }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0775"
+
+- name: Write Patroni configuration
+  ansible.builtin.template:
+    src: patroni.yml.j2
+    dest: "{{ patroni_config_path }}"
+    owner: postgres
+    group: postgres
+    mode: "0600"
+  notify: Reload Patroni
+
+# The Debian patroni package service file may point to /etc/patroni/config.yml
+# while RHEL packages vary similarly. A drop-in override pins the ExecStart to our
+# actual config path on all distros, making the service file's default irrelevant.
+- name: Create patroni systemd override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/patroni.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write patroni systemd ExecStart override (pin config path)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/patroni.service.d/config-path.conf
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/bin/patroni {{ patroni_config_path }}
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Flush handlers before starting patroni (ensure daemon-reload ran)
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start Patroni service
+  ansible.builtin.service:
+    name: "{{ patroni_service_name }}"
+    state: started
+    enabled: true
+
+# Patroni initialises PostgreSQL on first start; wait until the cluster is up.
+- name: Wait for Patroni REST API to become available
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ patroni_restapi_port }}/health"
+    status_code: 200
+  register: _patroni_health
+  retries: 30
+  delay: 5
+  until: _patroni_health.status == 200
+
+- name: Wait for PostgreSQL to accept connections via Patroni
+  ansible.builtin.command:
+    cmd: "{{ postgresql_bin_dir }}/pg_isready -h 127.0.0.1 -p {{ postgresql_port }} -U {{ patroni_superuser_username }}"
+  register: _pg_ready
+  retries: 20
+  delay: 5
+  until: _pg_ready.rc == 0
+  changed_when: false

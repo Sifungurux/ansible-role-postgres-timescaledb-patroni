@@ -1,0 +1,20 @@
+---
+- name: Assert supported OS family
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family in ['Debian', 'RedHat']
+    fail_msg: "Unsupported OS family: {{ ansible_os_family }}. Role supports Debian and RedHat."
+
+- name: Assert PostgreSQL version is 16 or higher
+  ansible.builtin.assert:
+    that:
+      - postgresql_version | int >= 16
+    fail_msg: "postgresql_version must be 16 or higher (got {{ postgresql_version }})."
+
+- name: Assert required passwords are set
+  ansible.builtin.assert:
+    that:
+      - patroni_superuser_password | length > 0
+      - patroni_replication_password | length > 0
+    fail_msg: "patroni_superuser_password and patroni_replication_password must not be empty."
+  no_log: true
