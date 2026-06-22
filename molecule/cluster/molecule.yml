@@ -1,0 +1,84 @@
+---
+# 3-node Debian 12 cluster — tests multi-node etcd quorum, Patroni leader
+# election, and streaming replication. Run with:
+#   molecule test -s cluster
+#
+# Use Colima on macOS:
+#   colima start --cpu 4 --memory 8
+#   molecule test -s cluster
+dependency:
+  name: galaxy
+  options:
+    requirements-file: requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: pg-node1
+    image: geerlingguy/docker-debian12-ansible:latest
+    command: "/lib/systemd/systemd"
+    cgroupns_mode: host
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    pre_build_image: true
+    groups:
+      - pg_cluster
+
+  - name: pg-node2
+    image: geerlingguy/docker-debian12-ansible:latest
+    command: "/lib/systemd/systemd"
+    cgroupns_mode: host
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    pre_build_image: true
+    groups:
+      - pg_cluster
+
+  - name: pg-node3
+    image: geerlingguy/docker-debian12-ansible:latest
+    command: "/lib/systemd/systemd"
+    cgroupns_mode: host
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    pre_build_image: true
+    groups:
+      - pg_cluster
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.."
+  config_options:
+    defaults:
+      callback_whitelist: profile_tasks
+  inventory:
+    group_vars:
+      pg_cluster:
+        patroni_cluster_group: pg_cluster
+        patroni_scope: test-cluster
+        patroni_superuser_password: "TestSuperPass123!"
+        patroni_replication_password: "TestReplPass123!"
+        timescaledb_db_name: testdb
+        timescaledb_app_user: testuser
+        timescaledb_app_password: "TestAppPass123!"
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - cleanup
+    - destroy

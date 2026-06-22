@@ -1,0 +1,204 @@
+---
+- name: Verify cluster health
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    postgresql_version: 16
+    patroni_restapi_port: 8008
+    postgresql_port: 5432
+    patroni_superuser_username: postgres
+    patroni_superuser_password: "TestSuperPass123!"
+    timescaledb_db_name: testdb
+    timescaledb_app_user: testuser
+    timescaledb_app_password: "TestAppPass123!"
+
+  tasks:
+    # ── Service health ──────────────────────────────────────────────────────
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert etcd is active
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['etcd.service'].state == 'running'
+        fail_msg: "etcd service is not running on {{ inventory_hostname }}"
+
+    - name: Assert Patroni is active
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['patroni.service'].state == 'running'
+        fail_msg: "Patroni service is not running on {{ inventory_hostname }}"
+
+    # ── etcd cluster membership ─────────────────────────────────────────────
+    - name: Query etcd member list
+      ansible.builtin.command:
+        cmd: /usr/local/bin/etcdctl --endpoints=http://127.0.0.1:2379 member list -w json
+      environment:
+        ETCDCTL_API: "3"
+      register: _etcd_members
+      changed_when: false
+
+    - name: Assert etcd has 3 members
+      ansible.builtin.assert:
+        that:
+          - (_etcd_members.stdout | from_json).members | length == 3
+        fail_msg: >-
+          Expected 3 etcd members on {{ inventory_hostname }},
+          got {{ (_etcd_members.stdout | from_json).members | length }}
+
+    # ── Patroni REST API + role discovery ───────────────────────────────────
+    - name: Query Patroni REST API
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ patroni_restapi_port }}/patroni"
+        return_content: true
+        status_code: 200
+      register: _patroni_api
+
+    - name: Assert Patroni cluster state is running
+      ansible.builtin.assert:
+        that:
+          - _patroni_api.json.state == 'running'
+        fail_msg: "Patroni state={{ _patroni_api.json.state }} on {{ inventory_hostname }}"
+
+    - name: Record this node's Patroni role
+      ansible.builtin.set_fact:
+        _patroni_role: "{{ _patroni_api.json.role | default('unknown') }}"
+
+    # ── Cluster-wide: exactly one primary ───────────────────────────────────
+    - name: Assert exactly one Patroni primary across all nodes
+      ansible.builtin.assert:
+        that:
+          - >-
+            ansible_play_hosts
+            | map('extract', hostvars)
+            | map(attribute='_patroni_role', default='unknown')
+            | select('in', ['master', 'primary'])
+            | list
+            | length == 1
+        fail_msg: >-
+          Expected exactly 1 primary. Roles: {{
+            ansible_play_hosts
+            | map('extract', hostvars)
+            | map(attribute='_patroni_role', default='unknown')
+            | list
+          }}
+      run_once: true
+
+    # ── PostgreSQL readiness ────────────────────────────────────────────────
+    - name: Load OS-specific variables for bin path
+      ansible.builtin.include_vars: "../../vars/{{ ansible_os_family }}.yml"
+
+    - name: Check PostgreSQL accepts connections
+      ansible.builtin.command:
+        cmd: >-
+          {{ postgresql_bin_dir }}/pg_isready
+          -h 127.0.0.1 -p {{ postgresql_port }} -U {{ patroni_superuser_username }}
+      register: _pg_isready
+      changed_when: false
+      failed_when: _pg_isready.rc != 0
+
+    # ── TimescaleDB extension (all nodes — replicated, read-only catalog) ───
+    - name: Verify TimescaleDB in postgres database
+      community.postgresql.postgresql_query:
+        login_db: postgres
+        query: "SELECT extname FROM pg_extension WHERE extname = 'timescaledb'"
+        login_unix_socket: "/var/run/postgresql"
+      become_user: postgres
+      register: _tsdb_ext
+
+    - name: Assert TimescaleDB extension in postgres
+      ansible.builtin.assert:
+        that:
+          - _tsdb_ext.rowcount == 1
+        fail_msg: "TimescaleDB not in pg_extension on {{ inventory_hostname }}"
+
+    - name: Verify TimescaleDB in application database
+      community.postgresql.postgresql_query:
+        login_db: "{{ timescaledb_db_name }}"
+        query: "SELECT extname FROM pg_extension WHERE extname = 'timescaledb'"
+        login_unix_socket: "/var/run/postgresql"
+      become_user: postgres
+      register: _tsdb_appdb_ext
+
+    - name: Assert TimescaleDB extension in testdb
+      ansible.builtin.assert:
+        that:
+          - _tsdb_appdb_ext.rowcount == 1
+        fail_msg: "TimescaleDB not in {{ timescaledb_db_name }} on {{ inventory_hostname }}"
+
+    # ── External TCP connections (all nodes — hot standby allows reads) ─────
+    - name: Verify TCP connection as superuser
+      community.postgresql.postgresql_query:
+        login_db: postgres
+        query: "SELECT version()"
+        login_host: "127.0.0.1"
+        login_port: "{{ postgresql_port }}"
+        login_user: "{{ patroni_superuser_username }}"
+        login_password: "{{ patroni_superuser_password }}"
+      register: _tcp_super
+
+    - name: Assert superuser TCP connection succeeded
+      ansible.builtin.assert:
+        that:
+          - _tcp_super.rowcount == 1
+        fail_msg: "Superuser TCP connection failed on {{ inventory_hostname }}"
+
+    - name: Verify TCP connection as app user
+      community.postgresql.postgresql_query:
+        login_db: "{{ timescaledb_db_name }}"
+        query: "SELECT current_user"
+        login_host: "127.0.0.1"
+        login_port: "{{ postgresql_port }}"
+        login_user: "{{ timescaledb_app_user }}"
+        login_password: "{{ timescaledb_app_password }}"
+      register: _tcp_app
+
+    - name: Assert app user TCP connection succeeded
+      ansible.builtin.assert:
+        that:
+          - _tcp_app.rowcount == 1
+        fail_msg: "App user TCP connection failed on {{ inventory_hostname }}"
+
+    # ── Streaming replication (primary only) ────────────────────────────────
+    - name: Count streaming replicas
+      community.postgresql.postgresql_query:
+        login_db: postgres
+        query: "SELECT count(*) AS cnt FROM pg_stat_replication WHERE state = 'streaming'"
+        login_unix_socket: "/var/run/postgresql"
+      become_user: postgres
+      register: _streaming_count
+      when: _patroni_role in ['master', 'primary']
+      changed_when: false
+
+    - name: Assert all replicas are streaming
+      ansible.builtin.assert:
+        that:
+          - _streaming_count.query_result[0].cnt | int == (ansible_play_hosts | length) - 1
+        fail_msg: >-
+          Expected {{ (ansible_play_hosts | length) - 1 }} streaming replicas,
+          got {{ _streaming_count.query_result[0].cnt }}
+      when: _patroni_role in ['master', 'primary']
+
+    # ── Hypertable smoke test (primary only — DDL write) ───────────────────
+    - name: Create hypertable on primary to confirm TimescaleDB is functional
+      community.postgresql.postgresql_query:
+        login_db: "{{ timescaledb_db_name }}"
+        query: |
+          CREATE TABLE IF NOT EXISTS sensor_data (
+            time TIMESTAMPTZ NOT NULL,
+            sensor_id INTEGER,
+            value DOUBLE PRECISION
+          );
+          SELECT create_hypertable('sensor_data', 'time', if_not_exists => TRUE);
+        login_unix_socket: "/var/run/postgresql"
+      become_user: postgres
+      register: _hypertable
+      when: _patroni_role in ['master', 'primary']
+
+    - name: Assert hypertable creation succeeded
+      ansible.builtin.assert:
+        that:
+          - _hypertable is succeeded
+        fail_msg: "Failed to create hypertable: {{ _hypertable }}"
+      when: _patroni_role in ['master', 'primary']

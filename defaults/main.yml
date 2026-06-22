@@ -20,7 +20,12 @@ patroni_replication_password: replicator
 patroni_restapi_username: ""
 patroni_restapi_password: ""
 
-# etcd DCS — list one or more endpoints
+# Multi-node clustering: set to the Ansible inventory group that contains all
+# Patroni nodes. The role auto-builds patroni_etcd_hosts from the group and
+# generates a full ETCD_INITIAL_CLUSTER string. Leave empty for single-node.
+patroni_cluster_group: ""
+
+# etcd DCS — list one or more endpoints (auto-built when patroni_cluster_group is set)
 patroni_etcd_hosts:
   - "127.0.0.1:2379"
 
